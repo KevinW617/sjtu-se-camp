@@ -1,0 +1,12 @@
+hello
+world
+apple
+brave
+green
+HELLO
+WORLD
+APPLE
+BRAVE
+GREEN
+0 0 hello
+13 156
