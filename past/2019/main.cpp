@@ -35,8 +35,9 @@ struct LinearHash {
         size = size * 2;
         tbl = vector<pair<int, int>>(size, {0, 0});
         occupy = vector<int>(size, 0);
+        elems = 0;
 
-        for (int i = 0; i < size; i++) {
+        for (int i = 0; i < old_size; i++) {
             if (old_occupy[i % size] != 0) {
                 Set(old_tbl[i].first, old_tbl[i].second);
             }
@@ -76,33 +77,57 @@ struct LinearHash {
 
     void Del(int key) {
         int hkey = key % size;
-        bool fnd = false;
-        int i;
-        for (i = hkey; i < hkey + size; i++) {
+        int pos = -1;
+        
+        // 1. 找到要删除的元素
+        for (int i = hkey; i < hkey + size; i++) {
             if (occupy[i % size] != 0 && tbl[i % size].first == key) {
-                occupy[i % size] = 0;
-                tbl[i % size] = {0, 0};
-                fnd = true;
+                pos = i % size;
+                occupy[pos] = 0;
+                tbl[pos] = {0, 0};
+                elems--;
                 break;
             }
         }
-
-        if (fnd) {
-            int lastj = INVALID;
-            for (int j = i; j < i + size; j++) {
-                if (occupy[j % size] != 0 && (tbl[j % size].first % size == key % size)) {
-                    lastj = j;
-                } else if (!(occupy[j % size] != 0 && (tbl[j % size].first % size == key % size)) && lastj != INVALID) {
-                    occupy[i % size] = 1;
-                    tbl[i % size] = {tbl[lastj % size]};
-
-                    occupy[lastj % size] = 0;
-                    tbl[lastj % size] = {0, 0};
-                    break;
-                } else {
-                    break;
+        
+        if (pos == -1) return; // 没找到要删除的元素
+        
+        // 2. 重新排列后续元素
+        int j = (pos + 1) % size;
+        while (occupy[j] != 0) {
+            int element_key = tbl[j].first;
+            int original_hash = element_key % size;
+            
+            // 判断这个元素是否需要前移
+            bool should_move = false;
+            
+            if (original_hash <= pos) {
+                // 元素的原始位置在删除位置之前或等于删除位置
+                if (pos < j) {
+                    // 正常情况：original_hash <= pos < j
+                    should_move = true;
+                } else if (j < original_hash) {
+                    // 环形情况：j < original_hash <= pos
+                    should_move = true;
+                }
+            } else {
+                // 元素的原始位置在删除位置之后
+                if (j < original_hash && pos < j) {
+                    // 环形情况：pos < j < original_hash
+                    should_move = true;
                 }
             }
+            
+            if (should_move) {
+                // 移动元素到空位
+                tbl[pos] = tbl[j];
+                occupy[pos] = 1;
+                occupy[j] = 0;
+                tbl[j] = {0, 0};
+                pos = j; // 更新空位位置
+            }
+            
+            j = (j + 1) % size;
         }
     }
 };
@@ -131,24 +156,24 @@ struct CuckooHash {
     }
 
     int Get(int key) {
-        if (occupy1[key % size] && tbl1[key % size].first == key) {
-            return tbl1[key % size].second;
+        if (occupy1[hk1(key)] && tbl1[hk1(key)].first == key) { // 应该用hk1(key)而不是key % size
+            return tbl1[hk1(key)].second;
         }
-
-        if (occupy2[(key / size) % size] && tbl2[(key / size) % size].first == key) {
-            return tbl2[(key / size) % size].second;
+    
+        if (occupy2[hk2(key)] && tbl2[hk2(key)].first == key) { // 应该用hk2(key)而不是(key / size) % size
+            return tbl2[hk2(key)].second;
         }
-
+    
         return INVALID;
     }
 
     void Del(int key) {
-        if (occupy1[key % size] && tbl1[key % size].first == key) {
-            tbl1[key % size] = {0, 0};
-            occupy1[key % size] = 0;
+        if (occupy1[hk1(key)] && tbl1[hk1(key)].first == key) {
+            tbl1[hk1(key)] = {0, 0};
+            occupy1[hk1(key)] = 0;
         }
-
-        if (occupy2[(key / size) % size] && tbl2[(key / size) % size].first == key) {
+    
+        if (occupy2[hk2(key)] && tbl2[hk2(key)].first == key) {
             tbl2[hk2(key)] = {0, 0};
             occupy2[hk2(key)] = 0;
         }
@@ -171,134 +196,124 @@ struct CuckooHash {
 
         for (int i = 0; i < old_size; i++) {
             if (old_occupy1[i]) {
-                // cout << "Enlarge set " << old_tbl1[i].first << " " << old_tbl1[i].second << endl;
                 Set(old_tbl1[i].first, old_tbl1[i].second);
             }
             if (old_occupy2[i]) {
-                // cout << "Enlarge set " << old_tbl2[i].first << " " << old_tbl2[i].second << endl;
                 Set(old_tbl2[i].first, old_tbl2[i].second);
             }
         }
     }
 
     void Set(int key, int value) {
+        if (tbl1[hk1(key)].first == key) {
+            tbl1[hk1(key)].second = value;
+            return;
+        }
+        if (tbl2[hk2(key)].first == key) {
+            tbl2[hk2(key)].second = value;
+            return;
+        }
+        int tbidx = 1;
+        int cur_key = key, cur_val = value;
 
-        while (1) {
-            int tbidx = 1;
-            int cur_key = key, cur_val = value;
+        stack<pair<int, int>> stk;
+        bool done = false;
+        bool loop = false;
 
-            stack<pair<int, int>> stk;
-            bool done = false;
-            bool loop = false;
+        int cnt = 1;
+        // 迭代找空位
+        while (cnt++) {
+            if (cnt > 100000) assert(false);
+            int hk;
+            if (tbidx == 1) {
+                hk = hk1(cur_key);
 
-            int cnt = 1;
-            while (cnt++) {
-                if (cnt > 100000) assert(false);
-                int hk;
-                if (tbidx == 1) {
-                    hk = hk1(cur_key);
-
-                    if (occupy1[hk] == 0) {
-                        // cout << "occupy1[" << hk << "] = 0" << endl;
-                        break;
-                    } else if (occupy1[hk] != 0 && tbl1[hk].first == key) {
-                        tbl1[hk].second = value;
-                        // cout << "found " << endl;
-                        done = true;
-                        break;
-                    } else {
-                        // cout << "hello " << endl;
-                        stack<pair<int, int>> tmp_stk = stk;
-                        while (!tmp_stk.empty()) {
-                            if (tbl1[hk] == tmp_stk.top()) {
-                                loop = true;
-                                break;
-                            } else {
-                                tmp_stk.pop();
-                            }
-                        }
-                        // cout << "loop " << loop << endl;
-                        if (loop) break;
-                        stk.push(tbl1[hk]);
-                        // cout << "stack push " << tbl1[hk].first << " " << tbl1[hk].second << endl;
-                    }
-                    tbidx = 2;
-                    cur_key = tbl1[hk].first;
-                    cur_val = tbl1[hk].second;
+                if (occupy1[hk] == 0) {
+                    break;
+                } else if (occupy1[hk] != 0 && tbl1[hk].first == key) {
+                    tbl1[hk].second = value;
+                    done = true;
+                    break;
                 } else {
-                    hk = hk2(cur_key);
-                    if (occupy2[hk] == 0) {
-                        // cout << "occupy2[" << hk << "] = 0" << endl;
-                        break;
-                    } else if (occupy2[hk] != 0 && tbl2[hk].first == key) {
-                        tbl2[hk].second = value;
-                        done = true;
-                        // cout << "found " << endl;
-                        break;
-                    } else {
-                        // cout << "hello " << endl;
-                        stack<pair<int, int>> tmp_stk = stk;
-                        while (!tmp_stk.empty()) {
-                            if (tbl2[hk] == tmp_stk.top()) {
-                                loop = true;
-                                break;
-                            } else {
-                                tmp_stk.pop();
-                            }
+                    // 判断是否成环
+                    stack<pair<int, int>> tmp_stk = stk;
+                    while (!tmp_stk.empty()) {
+                        if (tbl1[hk] == tmp_stk.top()) {
+                            loop = true;
+                            break;
+                        } else {
+                            tmp_stk.pop();
                         }
-                        // cout << "loop " << loop << endl;
-                        if (loop) break;
-                        stk.push(tbl2[hk]);
-                        // cout << "stack push " << tbl2[hk].first << " " << tbl2[hk].second << endl;
                     }
-                    tbidx = 1;
-                    cur_key = tbl2[hk].first;
-                    cur_val = tbl2[hk].second;
+                    if (loop) break;
+                    stk.push(tbl1[hk]);
                 }
-            }
-
-            if (loop) {
-                // cout << "loop" << endl;
-                Enlarge();
-                continue;
-            }
-
-            if (!done) {
-                while (!stk.empty()) {
-                    if (tbidx == 1) {
-                        pair<int, int> kv = stk.top();
-                        int hk = hk1(kv.first);
-                        tbl1[hk] = kv;
-                        occupy1[hk] = 1;
-// cout << "move " << kv.first << " " << kv.second << " in table 1 " << hk << endl;
-                        stk.pop();
-                        tbidx = 2;
-                    } else {
-                        pair<int, int> kv = stk.top();
-                        int hk = hk2(kv.first);
-                        tbl2[hk] = kv;
-                        occupy2[hk] = 1;
-// cout << "move " << kv.first << " " << kv.second << " in table 2 " << hk << endl;
-                        stk.pop();
-                        tbidx = 1;
+                tbidx = 2;
+                cur_key = tbl1[hk].first;
+                cur_val = tbl1[hk].second;
+            } else {
+                hk = hk2(cur_key);
+                if (occupy2[hk] == 0) {
+                    break;
+                } else if (occupy2[hk] != 0 && tbl2[hk].first == key) {
+                    tbl2[hk].second = value;
+                    done = true;
+                    break;
+                } else {
+                    stack<pair<int, int>> tmp_stk = stk;
+                    while (!tmp_stk.empty()) {
+                        if (tbl2[hk] == tmp_stk.top()) {
+                            loop = true;
+                            break;
+                        } else {
+                            tmp_stk.pop();
+                        }
                     }
+                    if (loop) break;
+                    stk.push(tbl2[hk]);
                 }
+                tbidx = 1;
+                cur_key = tbl2[hk].first;
+                cur_val = tbl2[hk].second;
+            }
+        }
 
+        if (loop) {
+            // 成环后扩容
+            Enlarge();
+            Set(key, value);
+            done = true;
+        }
+
+        if (!done) {
+            // 采用栈来保存要移动的kv对，然后replay
+            while (!stk.empty()) {
                 if (tbidx == 1) {
-                    int hk = hk1(key);
-                    tbl1[hk] = {key, value};
+                    pair<int, int> kv = stk.top();
+                    int hk = hk1(kv.first);
+                    tbl1[hk] = kv;
                     occupy1[hk] = 1;
-// cout << "set " << key << " " << value << " in table1 " << hk << endl;
+                    stk.pop();
+                    tbidx = 2;
                 } else {
-                    int hk = hk2(key);
-                    tbl2[hk] = {key, value};
+                    pair<int, int> kv = stk.top();
+                    int hk = hk2(kv.first);
+                    tbl2[hk] = kv;
                     occupy2[hk] = 1;
-// cout << "set " << key << " " << value << " in table1 " << hk << endl;
+                    stk.pop();
+                    tbidx = 1;
                 }
             }
 
-
-            break;
+            if (tbidx == 1) {
+                int hk = hk1(key);
+                tbl1[hk] = {key, value};
+                occupy1[hk] = 1;
+            } else {
+                int hk = hk2(key);
+                tbl2[hk] = {key, value};
+                occupy2[hk] = 1;
+            }
         }
     }
 };
@@ -317,7 +332,6 @@ int main(int argc, char* argv[]) {
     if (mode == "linear") {
         LinearHash ltbl(8);
         while (getline(fin, line)) {
-            // cout << line << endl;
             stringstream ss(line);
             string op;
             ss >> op;
@@ -345,7 +359,6 @@ int main(int argc, char* argv[]) {
     } else if (mode == "cuckoo") {
         CuckooHash ltbl(8);
         while (getline(fin, line)) {
-            // cout << line << endl;
             stringstream ss(line);
             string op;
             ss >> op;
